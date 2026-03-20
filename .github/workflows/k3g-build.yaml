@@ -1,4 +1,4 @@
-name: Kindle K3G Lynx Snapshot Build (Fixed Autoreconf)
+name: Kindle K3G Lynx Snapshot Build (Fixed Dependencies)
 
 on: workflow_dispatch
 
@@ -12,29 +12,23 @@ jobs:
           repository: ThomasDickey/lynx-snapshots
           ref: master
 
-      - name: Install ARMv5 Cross-Toolchain + Autotools Fix
+      - name: Install ARMv5 Cross-Toolchain (No i386)
         run: |
           sudo apt update
           sudo apt install -y build-essential autoconf automake libtool pkg-config
-          sudo apt install -y gcc-arm-linux-gnueabi libc6-dev-armel-cross 
-          sudo apt install -y libncurses5-dev:i386 libssl-dev:i386 bc bison flex
+          sudo apt install -y gcc-arm-linux-gnueabi libc6-dev-armel-cross
+          sudo apt install -y libncurses5-dev libssl-dev bc bison flex
+          # Native 64-bit host libs only - cross-compiler links statically
 
-      - name: Fix Autoreconf Issues (configure.in → configure.ac)
+      - name: Fix Autoreconf Issues
         run: |
-          # Lynx snapshots use legacy configure.in (not .ac)
-          # Convert and patch for modern autoconf 2.71+
           cp configure.in configure.ac
-          
-          # Patch missing USE_X509_SUPPORT (autoheader failure)
-          echo "#define USE_X509_SUPPORT 1" >> acconfig.h || touch acconfig.h
-          
-          # Suppress AC_OUTPUT warnings (legacy Lynx style)
+          touch acconfig.h
+          echo "#define USE_X509_SUPPORT 1" >> acconfig.h
           sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac
-          
-          # Update autotools macros
           autoupdate
 
-      - name: Autoreconf (Now Fixed)
+      - name: Autoreconf
         run: |
           autoreconf -fiv
 
@@ -50,7 +44,7 @@ jobs:
           echo "CC=${CC}" >> $GITHUB_ENV
           echo "CXX=${CXX}" >> $GITHUB_ENV
 
-      - name: Configure for Kindle Keyboard 3G (i.MX353 ARM1136)
+      - name: Configure for Kindle Keyboard 3G
         run: |
           ./configure \
             --host=${CROSS_TRIPLE} \
@@ -71,19 +65,18 @@ jobs:
           make clean
           make -j$(nproc) V=1
 
-      - name: Package IPKG for K3G OptWare
+      - name: Package IPKG
         run: |
           mkdir -p lynx-k3g/usr/bin lynx-k3g/opt/lynx
           cp lynx lynx-k3g/usr/bin/
           cp src/lynx.cfg.sample lynx-k3g/opt/lynx/
-          
+
           mkdir -p lynx-k3g/CONTROL
           cat > lynx-k3g/CONTROL/control << 'EOF'
           Package: lynx
           Version: 2.9.2-snapshot
           Architecture: armeabi
           Description: Lynx text browser TLS 1.2+ for Kindle Keyboard 3G (B006)
-           Targets Freescale i.MX353 ARM1136 @532MHz, firmware 3.4.x
           Depends: openssl, ncurses
           EOF
 
