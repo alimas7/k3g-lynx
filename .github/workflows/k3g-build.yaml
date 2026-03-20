@@ -29,22 +29,20 @@ jobs:
           # ./k3g-test
           rm k3g-test.c k3g-test
 
-      - name: Fix Lynx Autotools (COMPLETE)
+      - name: Fix Lynx Autotools (CORRECT)
         run: |
-          # Remove broken configure.in
-          rm -f configure.in configure.ac
+          # Keep configure.ac, just fix it
+          cp configure.in configure.ac 2>/dev/null || true
 
-          # Force regenerate everything clean
-          autoreconf -fiv || {
-            # Manual fix for USE_X509_SUPPORT
-            touch acconfig.h
-            echo "/* X509 support */" >> acconfig.h
-            echo "#undef USE_X509_SUPPORT" >> acconfig.h
-            autoreconf -fiv
-          }
+          # Fix USE_X509_SUPPORT - create missing header
+          touch acconfig.h 2>/dev/null || true
+          grep -q "USE_X509_SUPPORT" acconfig.h || echo "undef USE_X509_SUPPORT" >> acconfig.h
 
-          # Suppress obsolete macro warnings
-          sed -i 's/AC_TRY_COMPILE/AC_COMPILE_IFELSE/g' configure.ac || true
+          # Update obsolete macros
+          autoupdate configure.ac 2>/dev/null || true
+
+          # Run autoreconf
+          autoreconf -fiv
 
       - name: Configure Lynx for Kindle K3G i.MX353 ARM1136J-S
         run: |
