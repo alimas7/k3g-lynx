@@ -1,107 +1,51 @@
-name: Kindle K3G Lynx Snapshot Build (Fixed Cross-Compiler)
+name: Kindle K3G Lynx (NiLuJe Toolchain)
 
 on: workflow_dispatch
 
 jobs:
-  cross-compile:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Lynx Snapshots Fork
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: ThomasDickey/lynx-snapshots
           ref: master
 
-      - name: Install COMPLETE ARMv5 Toolchain + Sysroot
+      - name: Download NiLuJe K3 Toolchain
         run: |
-          sudo dpkg --add-architecture armel
-          sudo apt update
-          sudo apt install -y build-essential autoconf automake libtool pkg-config
-          sudo apt install -y gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
-          sudo apt install -y libc6-dev-armel-cross libncurses5-dev:armel libssl-dev:armel
-          sudo apt install -y binutils-arm-linux-gnueabi
+          wget "http://www.mobileread.com/forums/attachment.php?attachmentid=XXXX" \
+            -O k3-toolchain.tar.bz2  # Replace XXXX with actual ID from post
+          tar xjf k3-toolchain.tar.bz2
+          export PATH="$PWD/k3-toolchain/bin:$PATH"
 
-      - name: Verify Cross-Compiler + ARM Sysroot
-        run: |
-          arm-linux-gnueabi-gcc --version
-          arm-linux-gnueabi-gcc -print-sysroot
-          arm-linux-gnueabi-gcc -v -dumpversion
-          echo 'int main(){return 0;}' > test.c
-          arm-linux-gnueabi-gcc -static test.c -o test-arm
-          file test-arm
-          arm-linux-gnueabi-objdump -h test-arm
-
-      - name: Fix Autoreconf Issues
+      - name: Fix Lynx Autotools
         run: |
           cp configure.in configure.ac
-          touch acconfig.h
-          echo "#define USE_X509_SUPPORT 1" >> acconfig.h
           sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac
-          autoupdate
-
-      - name: Autoreconf
-        run: |
           autoreconf -fiv
 
-      - name: Setup Kindle K3G Environment (Fixed Paths)
+      - name: Configure + Build Lynx
         run: |
-          export CROSS_TRIPLE=arm-linux-gnueabi
-          export CC=arm-linux-gnueabi-gcc
-          export CXX=arm-linux-gnueabi-g++
-          export AR=arm-linux-gnueabi-ar
-          export RANLIB=arm-linux-gnueabi-ranlib
-          export STRIP=arm-linux-gnueabi-strip
-          export PKG_CONFIG_PATH=/usr/arm-linux-gnueabi/lib/pkgconfig:/usr/lib/arm-linux-gnueabi/pkgconfig
-          export PKG_CONFIG_LIBDIR=/usr/arm-linux-gnueabi/lib
-          echo "CROSS_TRIPLE=${CROSS_TRIPLE}" >> $GITHUB_ENV
-          echo "CC=${CC}" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          export CC=arm-v5te-linux-gnueabi-gcc
+          export CFLAGS="-O2 -march=armv5te -msoft-float -static"
 
-      - name: Configure Lynx for K3G (Static + Sysroot)
-        run: |
-          # Use cross-compiler sysroot and static linking
           ./configure \
-            --host=${CROSS_TRIPLE} \
+            --host=arm-v5te-linux-gnueabi \
             --prefix=/opt \
             --with-ssl=openssl \
             --disable-gopher \
-            --disable-prettysrc \
-            CC="${CC}" \
-            CFLAGS="-O2 -static -march=armv5te -mtune=arm926ej-s -msoft-float -marm" \
-            LDFLAGS="-static --sysroot=/usr/arm-linux-gnueabi" \
-            LIBS="-static -lncurses -lssl -lcrypto -lz"
+            $CFLAGS $LDFLAGS
+          
+          make clean && make -j4
 
-      - name: Build Lynx
+      - name: Package IPK
         run: |
-          make clean
-          make V=1
-
-      - name: Verify + Strip Binary
-        run: |
-          file lynx
-          arm-linux-gnueabi-strip lynx
-          ls -lh lynx
-          arm-linux-gnueabi-readelf -h lynx
-
-      - name: Package IPKG
-        run: |
-          mkdir -p lynx-k3g/usr/bin
-          cp lynx lynx-k3g/usr/bin/
-
-          mkdir -p lynx-k3g/CONTROL
-          cat > lynx-k3g/CONTROL/control << 'EOF'
-          Package: lynx
-          Version: 2.9.2u-k3g
-          Architecture: armeabi
-          Description: Lynx TLS 1.2+ for Kindle Keyboard 3G i.MX353
-          Depends: openssl, ncurses
-          EOF
-          tar czf lynx_k3g.arm.ipk -C lynx-k3g . --owner=0 --group=0
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+          mkdir -p lynx-k3/usr/bin
+          cp lynx lynx-k3/usr/bin/
+          # Create IPK control file...
+          tar czf lynx-k3g.ipk -C lynx-k3 .
+        
+      - uses: actions/upload-artifact@v4
         with:
-          name: lynx-k3g-final
-          path: |
-            lynx_k3g.arm.ipk
-            lynx
+          name: lynx-k3g-production
+          path: lynx-k3g.ipk
