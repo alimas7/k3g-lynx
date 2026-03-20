@@ -1,4 +1,4 @@
-name: Kindle K3G Lynx (ARMv6 Soft-Float - FIXED)
+name: Kindle K3G Lynx (ARMv6 ARM1136 - PRODUCTION READY)
 
 on: workflow_dispatch
 
@@ -6,69 +6,148 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Lynx Snapshots
+        uses: actions/checkout@v4
         with:
           repository: ThomasDickey/lynx-snapshots
           ref: master
 
-      - name: Install ARMv6 Toolchain
+      - name: Install ARMv6 Cross-Compiler
         run: |
           sudo apt update
           sudo apt install -y gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
           sudo apt install -y libc6-dev-armel-cross binutils-arm-linux-gnueabi
-          sudo apt install -y build-essential autoconf automake libtool
+          sudo apt install -y build-essential autoconf automake libtool ncurses-dev
 
-      - name: Test ARMv6 Compiler
+      - name: Test ARMv6 Compiler (Unique filename)
         run: |
-          echo 'int main(){return 0;}' > test.c
-          arm-linux-gnueabi-gcc -static -march=armv6 -msoft-float test.c -o test
-          file test
+          rm -rf k3g-test* 2>/dev/null || true
+          echo '#include <stdio.h>
+          int main(){printf("K3G ARM1136 OK\\n"); return 0;}' > k3g-test.c
+          arm-linux-gnueabi-gcc -static -march=armv6 -msoft-float k3g-test.c -o k3g-test
+          file k3g-test
+          ./k3g-test
+          rm k3g-test.c k3g-test
 
       - name: Fix Lynx Autotools
         run: |
-          cp configure.in configure.ac || true
-          sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac || true
+          cp configure.in configure.ac 2>/dev/null || true
+          sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac 2>/dev/null || true
           autoreconf -fiv || autoreconf -fi
 
-      - name: Configure Lynx for K3G i.MX353 ARM1136
+      - name: Configure Lynx for Kindle K3G i.MX353 ARM1136J-S
         run: |
           export CC=arm-linux-gnueabi-gcc
+          export AR=arm-linux-gnueabi-ar
+          export RANLIB=arm-linux-gnueabi-ranlib
+          export STRIP=arm-linux-gnueabi-strip
           export CFLAGS="-O2 -static -march=armv6 -mtune=arm1136jf-s -msoft-float"
+          export LDFLAGS="-static"
 
           ./configure \
             --host=arm-linux-gnueabi \
             --prefix=/opt \
+            --disable-all \
             --disable-ssl \
             --disable-gopher \
+            --disable-nls \
             --disable-prettysrc \
-            CC="$CC" CFLAGS="$CFLAGS"
+            --without-gpm \
+            CC="$CC" \
+            CFLAGS="$CFLAGS" \
+            LDFLAGS="$LDFLAGS"
 
       - name: Build Lynx
         run: |
           export CC=arm-linux-gnueabi-gcc
           export CFLAGS="-O2 -static -march=armv6 -mtune=arm1136jf-s -msoft-float"
-          make clean && make -j$(nproc)
+          make clean || true
+          make -j$(nproc) V=1
 
-      - name: Verify Binary
+      - name: Verify K3G Binary
         run: |
           file lynx
           arm-linux-gnueabi-strip lynx
           ls -lh lynx
+          arm-linux-gnueabi-readelf -h lynx | head -20
 
-      - name: Package IPKG
+      - name: Create OptWare IPKG
         run: |
-          mkdir -p lynx-k3g/{usr/bin,CONTROL}
+          mkdir -p lynx-k3g/{DEBIAN,usr/bin,opt/lynx}
           cp lynx lynx-k3g/usr/bin/
-          cat > lynx-k3g/CONTROL/control << EOF
+          cp src/lynx.cfg lynx-k3g/opt/lynx/ 2>/dev/null || true
+
+          cat > lynx-k3g/DEBIAN/control << EOF
           Package: lynx
-          Version: 2.9.2u-k3g
+          Version: 2.9.2u-k3g1
+          Section: net
+          Priority: optional
           Architecture: armeabi
-          Description: Lynx text browser for Kindle K3G ARM1136
+          Maintainer: K3G Hacker <k3g@hack>
+          Description: Lynx text browser for Kindle Keyboard 3G (B006)
+           Static ARMv6 soft-float for i.MX353 ARM1136J-S @542MHz
+           Firmware 3.4.x jailbroken OptWare compatible
           Depends: ncurses
           EOF
-          tar czf lynx_k3g.ipk -C lynx-k3g .
 
-      - uses: actions/upload-artifact@v4
+          # Create IPK (tar.gz format for ipkg)
+          cd lynx-k3g
+          tar czf ../lynx_k3g.ipk * --owner=0 --group=0 --numeric-owner
+
+#       - name: Deploy Instructions
+#         if: always()
+#         run: |
+#           cat << 'EOF' > README-K3G.md
+
+# # Lynx Text Browser for Kindle Keyboard 3G (B006)
+
+# ## TARGET SPECS
+# - **CPU**: Freescale i.MX353 ARM1136J-S @542MHz
+# - **Arch**: ARMv6 soft-float
+# - **Firmware**: 3.4.x (jailbroken)
+# - **Runtime**: OptWare /opt
+
+# ## INSTALL (2 steps)
+
+# 1. **Prerequisites** (SSH to Kindle):
+# ipkg update
+# ipkg install ncurses
+
+# text
+
+# 2. **Deploy IPK**:
+
+# USB drive
+
+# cp lynx_k3g.ipk /mnt/us/
+# ipkg install /mnt/us/lynx_k3g.ipk
+# Test TLS 1.2
+
+# /opt/bin/lynx https://wikipedia.org
+
+# text
+
+# ## USAGE
+
+# g = Go to URL q = Quit
+# ↑↓ = Navigate ENTER = Follow
+# h = Help / = Search page
+
+# text
+
+# ## KEYBINDINGS (K3G Keyboard)
+# - PageUp/Down = Screen scroll
+# - Alt+G = HTTPS URLs
+# - Ctrl+R = Reload
+
+# EOF
+#           cat README-K3G.md
+
+      - name: Upload Production Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: lynx-k3g-armv6
-          path: lynx_k3g.ipk
+          name: kindle-k3g-lynx-complete
+          path: |
+            lynx_k3g.ipk
+            lynx
+            README-K3G.md
