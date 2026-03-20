@@ -1,4 +1,4 @@
-name: Kindle K3G Lynx (NiLuJe Toolchain)
+name: K3G Lynx (NiLuJe Toolchain)
 
 on: workflow_dispatch
 
@@ -11,12 +11,12 @@ jobs:
           repository: ThomasDickey/lynx-snapshots
           ref: master
 
-      - name: Download NiLuJe K3 Toolchain
+      - name: Download NiLuJe's K3G Toolchain
         run: |
-          wget "http://www.mobileread.com/forums/attachment.php?attachmentid=XXXX" \
-            -O k3-toolchain.tar.bz2  # Replace XXXX with actual ID from post
-          tar xjf k3-toolchain.tar.bz2
-          export PATH="$PWD/k3-toolchain/bin:$PATH"
+          wget https://storage.gra.cloud.ovh.net/v1/AUTH_2ac4bfee353948ec8ea7fd1710574097/mr-public/Misc/kindle-x-tc-11.1.N-r19006.tar.xz
+          tar xf kindle-x-tc-11.1.N-r19006.tar.xz
+          export PATH="$PWD/kindle-x-tc-11.1.N-r19006/bin:$PATH"
+          arm-v5te-linux-gnueabi-gcc --version
 
       - name: Fix Lynx Autotools
         run: |
@@ -24,28 +24,35 @@ jobs:
           sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac
           autoreconf -fiv
 
-      - name: Configure + Build Lynx
+      - name: Build Lynx for K3G
         run: |
           export CC=arm-v5te-linux-gnueabi-gcc
-          export CFLAGS="-O2 -march=armv5te -msoft-float -static"
+          export CFLAGS="-O2 -march=armv5te -msoft-float"
 
           ./configure \
             --host=arm-v5te-linux-gnueabi \
             --prefix=/opt \
             --with-ssl=openssl \
             --disable-gopher \
-            $CFLAGS $LDFLAGS
-          
+            $CC $CFLAGS
+
           make clean && make -j4
 
-      - name: Package IPK
+      - name: Package IPKG
         run: |
-          mkdir -p lynx-k3/usr/bin
-          cp lynx lynx-k3/usr/bin/
-          # Create IPK control file...
-          tar czf lynx-k3g.ipk -C lynx-k3 .
-        
+          mkdir -p lynx-k3g/usr/bin
+          cp lynx lynx-k3g/usr/bin/
+          mkdir -p lynx-k3g/CONTROL
+          cat > lynx-k3g/CONTROL/control << EOF
+          Package: lynx
+          Version: 2.9.2u-k3g
+          Architecture: armeabi
+          Description: Lynx TLS 1.2+ (NiLuJe toolchain)
+          Depends: openssl, ncurses
+          EOF
+          tar czf lynx_k3g.ipk -C lynx-k3g . --owner=0 --group=0
+
       - uses: actions/upload-artifact@v4
         with:
           name: lynx-k3g-production
-          path: lynx-k3g.ipk
+          path: lynx_k3g.ipk
