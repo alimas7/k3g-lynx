@@ -1,4 +1,4 @@
-name: Kindle K3G Lynx Snapshot Build
+name: Kindle K3G Lynx Snapshot Build (Fixed Autoreconf)
 
 on: workflow_dispatch
 
@@ -10,14 +10,33 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ThomasDickey/lynx-snapshots
-          ref: v2-9-2u  # Latest snapshot Sep 2025 [web:51]
+          ref: master
 
-      - name: Install ARMv5 Cross-Toolchain
+      - name: Install ARMv5 Cross-Toolchain + Autotools Fix
         run: |
           sudo apt update
           sudo apt install -y build-essential autoconf automake libtool pkg-config
           sudo apt install -y gcc-arm-linux-gnueabi libc6-dev-armel-cross 
-          sudo apt install -y libncurses5-dev libssl-dev bc bison flex
+          sudo apt install -y libncurses5-dev:i386 libssl-dev:i386 bc bison flex
+
+      - name: Fix Autoreconf Issues (configure.in → configure.ac)
+        run: |
+          # Lynx snapshots use legacy configure.in (not .ac)
+          # Convert and patch for modern autoconf 2.71+
+          cp configure.in configure.ac
+          
+          # Patch missing USE_X509_SUPPORT (autoheader failure)
+          echo "#define USE_X509_SUPPORT 1" >> acconfig.h || touch acconfig.h
+          
+          # Suppress AC_OUTPUT warnings (legacy Lynx style)
+          sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac
+          
+          # Update autotools macros
+          autoupdate
+
+      - name: Autoreconf (Now Fixed)
+        run: |
+          autoreconf -fiv
 
       - name: Setup Kindle K3G Environment
         run: |
@@ -30,13 +49,6 @@ jobs:
           echo "CROSS_TRIPLE=${CROSS_TRIPLE}" >> $GITHUB_ENV
           echo "CC=${CC}" >> $GITHUB_ENV
           echo "CXX=${CXX}" >> $GITHUB_ENV
-          echo "AR=${AR}" >> $GITHUB_ENV
-          echo "RANLIB=${RANLIB}" >> $GITHUB_ENV
-          echo "STRIP=${STRIP}" >> $GITHUB_ENV
-
-      - name: Autoreconf Lynx
-        run: |
-          autoreconf -fiv
 
       - name: Configure for Kindle Keyboard 3G (i.MX353 ARM1136)
         run: |
@@ -50,9 +62,8 @@ jobs:
             --disable-gopher \
             --disable-prettysrc \
             --without-gpm \
-            --enable-debug \
             CFLAGS="-O2 -static -march=armv5te -mtune=arm926ej-s -msoft-float -marm" \
-            LDFLAGS="-static -L/usr/arm-linux-gnueabi/lib" \
+            LDFLAGS="-static" \
             LIBS="-lncurses -lssl -lcrypto -lz"
 
       - name: Build Lynx
@@ -60,65 +71,28 @@ jobs:
           make clean
           make -j$(nproc) V=1
 
-      - name: Verify TLS 1.2 Support
-        run: |
-          file lynx || true
-          ${CC} -v || true
-          strings lynx | grep -i openssl || true
-
       - name: Package IPKG for K3G OptWare
         run: |
-          mkdir -p lynx-k3_{{ github.sha }}/usr/bin lynx-k3_{{ github.sha }}/opt/lynx
-          cp lynx lynx-k3_{{ github.sha }}/usr/bin/
-          cp src/lynx.cfg.sample lynx-k3_{{ github.sha }}/opt/lynx/
+          mkdir -p lynx-k3g/usr/bin lynx-k3g/opt/lynx
+          cp lynx lynx-k3g/usr/bin/
+          cp src/lynx.cfg.sample lynx-k3g/opt/lynx/
           
-          # K3G IPKG control file
-          mkdir -p lynx-k3_{{ github.sha }}/CONTROL
-          cat > lynx-k3_{{ github.sha }}/CONTROL/control << 'EOF'
+          mkdir -p lynx-k3g/CONTROL
+          cat > lynx-k3g/CONTROL/control << 'EOF'
           Package: lynx
           Version: 2.9.2-snapshot
           Architecture: armeabi
-          Maintainer: K3G Hacker
-          Description: Lynx text browser TLS 1.2+ for Kindle Keyboard 3G
-           Cross-compiled for Freescale i.MX353 ARM1136 @532MHz
-           Firmware 3.4.x jailbroken OptWare /opt
-          Depends: openssl, ncurses, libc
+          Description: Lynx text browser TLS 1.2+ for Kindle Keyboard 3G (B006)
+           Targets Freescale i.MX353 ARM1136 @532MHz, firmware 3.4.x
+          Depends: openssl, ncurses
           EOF
 
-          # Create IPK
-          tar czf lynx_k3g_${{ github.sha }}.arm.ipk \
-            -C lynx-k3_${{ github.sha }} \
-            --owner=0 --group=0 \
-            .
+          tar czf lynx_k3g.arm.ipk -C lynx-k3g . --owner=0 --group=0
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lynx-k3g-${{ github.sha }}
+          name: lynx-k3g-ipk
           path: |
-            lynx_k3g_${{ github.sha }}.arm.ipk
+            lynx_k3g.arm.ipk
             lynx
-            src/lynx.cfg.sample
-
-      # - name: Deploy Instructions
-      #   if: always()
-      #   run: |
-      #     cat << 'EOF' > K3G-INSTALL.md
-      #     # Kindle Keyboard 3G Lynx Deployment
-
-      #     TARGET: Kindle 3G B006, i.MX353 ARM1136, firmware 3.4.x
-
-      #     PREREQUISITES:
-      #     • Jailbreak (MobileRead K3 guide)
-      #     • USBNetwork/KUAL → ipkg update; ipkg install openssl ncurses
-      #     • SSH root access
-
-      #     INSTALL:
-      #     1. scp lynx_k3g_*.arm.ipk kindle:/mnt/us/
-      #     2. ssh root@kindle "ipkg install /mnt/us/lynx_k3g_*.arm.ipk"
-      #     3. /opt/bin/lynx -version
-      #     4. /opt/bin/lynx https://wikipedia.org
-
-      #     CONFIG: Edit /opt/etc/lynx.cfg for K3G keyboard mappings
-      #     EOF
-      #     cat K3G-INSTALL.md
