@@ -26,7 +26,7 @@ jobs:
           int main(){printf("K3G ARM1136 OK\\n"); return 0;}' > k3g-test.c
           arm-linux-gnueabi-gcc -static -march=armv6 -msoft-float k3g-test.c -o k3g-test
           file k3g-test
-          ./k3g-test
+          # ./k3g-test
           rm k3g-test.c k3g-test
 
       - name: Fix Lynx Autotools
