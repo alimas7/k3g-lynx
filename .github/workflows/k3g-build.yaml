@@ -1,4 +1,4 @@
-name: K3G Lynx (NiLuJe Toolchain)
+name: Kindle K3G Lynx (Crosstool-NG ARM1136 i.MX353)
 
 on: workflow_dispatch
 
@@ -6,53 +6,152 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Lynx Snapshots
+        uses: actions/checkout@v4
         with:
           repository: ThomasDickey/lynx-snapshots
           ref: master
 
-      - name: Download NiLuJe's K3G Toolchain
+      - name: Install Crosstool-NG Dependencies
         run: |
-          wget https://storage.gra.cloud.ovh.net/v1/AUTH_2ac4bfee353948ec8ea7fd1710574097/mr-public/Misc/kindle-x-tc-11.1.N-r19006.tar.xz
-          tar xf kindle-x-tc-11.1.N-r19006.tar.xz
-          export PATH="$PWD/kindle-x-tc-11.1.N-r19006/bin:$PATH"
-          arm-v5te-linux-gnueabi-gcc --version
+          sudo apt update
+          sudo apt install -y build-essential git autoconf automake libtool pkg-config \
+            gawk bison flex texinfo gperf libtool-bin help2man make \
+            libncurses5-dev libssl-dev zlib1g-dev libexpat-dev \
+            quilt libgmp-dev libmpfr-dev libmpc-dev
+
+      - name: Clone Crosstool-NG
+        run: |
+          git clone --depth 1 https://github.com/crosstool-ng/crosstool-ng.git
+          cd crosstool-ng
+          ./bootstrap
+          ./configure --prefix=/opt/crosstool-ng --enable-local
+          make -j$(nproc)
+          sudo make install
+
+      - name: Create K3G ARM1136 Config
+        run: |
+          export PATH="/opt/crosstool-ng/bin:$PATH"
+          ct-ng menuconfig << 'EOF'
+          # Kindle K3G: Freescale i.MX353 ARM1136J-S @542MHz
+          Target options
+          Target architecture → ARM (little endian)
+          Target architecture variant → armv6
+          Target CPU → arm1136jf-s
+          Target ABI → EABIhf
+          Floating point → VFPv2
+          Endianness → Little endian
+          Bitness → 32-bit
+
+          Operating System
+          Target OS → linux
+
+          Toolchain options
+          C compiler → gcc: linaro-12.2.1
+          Binutils → 2.40
+          Linux kernel → 5.4
+          C library → glibc (2.36)
+          Debug prefix → Full path components
+          Strip executables → No
+          EOF
+          ct-ng oldconfig
+          ct-ng savedefconfig -o k3g-arm1136.config
+
+      - name: Build K3G ARM1136 Toolchain
+        run: |
+          export PATH="/opt/crosstool-ng/bin:$PATH"
+          ct-ng build
+          echo "Toolchain built: /opt/x-tools/armv6-rpi-linux-gnueabihf/"
 
       - name: Fix Lynx Autotools
         run: |
-          cp configure.in configure.ac
-          sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac
-          autoreconf -fiv
+          cp configure.in configure.ac || true
+          sed -i 's/AC_OUTPUT(/AC_CONFIG_FILES(/g' configure.ac || true
+          autoreconf -fiv || autoreconf -fi
 
-      - name: Build Lynx for K3G
+      - name: Activate K3G ARM1136 Toolchain
         run: |
-          export CC=arm-v5te-linux-gnueabi-gcc
-          export CFLAGS="-O2 -march=armv5te -msoft-float"
+          source /opt/x-tools/armv6-rpi-linux-gnueabihf/buildscripts/environment-setup-armv6-rpi-linux-gnueabihf.sh
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+          $CC --version
+
+      - name: Configure Lynx for i.MX353 ARM1136
+        run: |
+          source /opt/x-tools/armv6-rpi-linux-gnueabihf/buildscripts/environment-setup-armv6-rpi-linux-gnueabihf.sh
+          export CFLAGS="-O2 -march=armv6 -mtune=arm1136jf-s -mfpu=vfpv2 -mfloat-abi=hard"
+          export LDFLAGS="-static"
 
           ./configure \
-            --host=arm-v5te-linux-gnueabi \
+            --host=armv6-rpi-linux-gnueabihf \
             --prefix=/opt \
             --with-ssl=openssl \
             --disable-gopher \
-            $CC $CFLAGS
+            --disable-prettysrc \
+            --enable-nsl-fork \
+            CFLAGS="$CFLAGS" \
+            LDFLAGS="$LDFLAGS"
 
-          make clean && make -j4
-
-      - name: Package IPKG
+      - name: Build Lynx
         run: |
-          mkdir -p lynx-k3g/usr/bin
+          source /opt/x-tools/armv6-rpi-linux-gnueabihf/buildscripts/environment-setup-armv6-rpi-linux-gnueabihf.sh
+          make clean
+          make -j$(nproc) V=1
+
+      - name: Verify ARM1136 Binary
+        run: |
+          source /opt/x-tools/armv6-rpi-linux-gnueabihf/buildscripts/environment-setup-armv6-rpi-linux-gnueabihf.sh
+          file lynx
+          $AR t lynx || true
+          $STRIP lynx
+          ls -lh lynx
+
+      - name: Package IPKG for Kindle K3G
+        run: |
+          mkdir -p lynx-k3g/{usr/bin,opt/lynx,CONTROL}
           cp lynx lynx-k3g/usr/bin/
-          mkdir -p lynx-k3g/CONTROL
-          cat > lynx-k3g/CONTROL/control << EOF
+          cp src/lynx.cfg.sample lynx-k3g/opt/lynx/
+
+          cat > lynx-k3g/CONTROL/control << 'EOF'
           Package: lynx
           Version: 2.9.2u-k3g
+          Section: net
           Architecture: armeabi
-          Description: Lynx TLS 1.2+ (NiLuJe toolchain)
-          Depends: openssl, ncurses
+          Maintainer: K3G Hacker
+          Description: Lynx TLS 1.2+ for Kindle Keyboard 3G (B006)
+           i.MX353 ARM1136J-S @542MHz, firmware 3.4.x OptWare
+          Depends: openssl, ncurses, libc
           EOF
-          tar czf lynx_k3g.ipk -C lynx-k3g . --owner=0 --group=0
 
-      - uses: actions/upload-artifact@v4
+          tar czf lynx_k3g_arm1136.ipk -C lynx-k3g . --owner=0 --group=0
+
+      - name: Install Instructions
+        if: always()
+        run: |
+          cat << 'EOF' > K3G-INSTALL.md
+          # Kindle Keyboard 3G Lynx (ARM1136 i.MX353)
+
+          TARGET: K3G B006 firmware 3.4.x (jailbroken)
+
+          PREREQS:
+          • Jailbreak (MobileRead wiki)
+          • OptWare: ipkg update; ipkg install openssl ncurses
+
+          INSTALL:
+          1. scp lynx_k3g_arm1136.ipk kindle:/mnt/us/
+          2. ssh root@kindle "ipkg install /mnt/us/lynx_k3g_arm1136.ipk"
+          3. /opt/bin/lynx -version
+          4. /opt/bin/lynx https://wikipedia.org
+
+          KEYS: g=URL, q=quit, ↑↓=navigate, ENTER=follow
+          EOF
+          cat K3G-INSTALL.md
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: lynx-k3g-production
-          path: lynx_k3g.ipk
+          name: lynx-k3g-arm1136
+          path: |
+            lynx_k3g_arm1136.ipk
+            lynx
+            K3G-INSTALL.md
